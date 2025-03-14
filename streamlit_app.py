@@ -7,7 +7,7 @@ db = mysql.connector.connect(
     port=3306,
     user="root",
     password="",
-    database="csnoteselling"
+    database="noteselling-wirpl"
 )
 cursor = db.cursor()
 
@@ -26,42 +26,40 @@ st.sidebar.title("Login / Registrasi")
 if role is None:
     with st.sidebar.form("login_form"):
         username_input = st.text_input("Nama Pengguna")
+        password_input = st.text_input("Password", type="password")
         login_btn = st.form_submit_button("Login")
-    
+
     with st.sidebar.form("register_form"):
         new_username = st.text_input("Nama Pengguna Baru")
         email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
         role_selection = st.radio("Pilih Peran:", ["BUYER", "SELLER"])
         register_btn = st.form_submit_button("Registrasi")
-    
+
     if login_btn:
-        cursor.execute("SELECT role FROM pengguna WHERE nama = %s", (username_input,))
+        cursor.execute("SELECT role, password, is_verified FROM users WHERE username = %s", (username_input,))
         user = cursor.fetchone()
-        if user:
-            st.session_state.role = user[0]
-            st.session_state.username = username_input
-            st.rerun()
+        if user and user[1] == password_input:
+            if user[2] == 'TRUE':
+                st.session_state.update({
+                    "role": user[0],
+                    "username": username_input
+                })
+                st.rerun()
+            else:
+                st.sidebar.error("Akun belum diverifikasi. Silakan cek email Anda.")
         else:
-            st.sidebar.error("Nama pengguna tidak ditemukan. Silakan registrasi terlebih dahulu.")
-    
+            st.sidebar.error("Nama pengguna atau password salah. Silakan coba lagi.")
+
     if register_btn:
-        cursor.execute("SELECT pengguna_id FROM pengguna ORDER BY pengguna_id DESC LIMIT 1")
-        last_id = cursor.fetchone()
-        
-        if last_id:
-            last_num = int(last_id[0][1:])  # Ambil angka setelah "U"
-            new_id = f"U{last_num + 1:04d}"  # Format ID baru, contoh: U0002, U0003
-        else:
-            new_id = "U0001"  # Jika belum ada user
-        
-        cursor.execute("SELECT * FROM pengguna WHERE nama = %s", (new_username,))
+        cursor.execute("SELECT * FROM users WHERE username = %s", (new_username,))
         existing_user = cursor.fetchone()
         if existing_user:
             st.sidebar.error("Nama pengguna sudah terdaftar, silakan pilih nama lain.")
         else:
-            cursor.execute("INSERT INTO pengguna (pengguna_id, nama, email, role) VALUES (%s, %s, %s, %s)", (new_id, new_username, email, role_selection))
+            cursor.execute("INSERT INTO users (username, email, password, role, is_verified) VALUES (%s, %s, %s, %s, 'FALSE')", (new_username, email, password, role_selection))
             db.commit()
-            st.sidebar.success("Registrasi berhasil! Silakan login.")
+            st.sidebar.success("Registrasi berhasil! Silakan cek email untuk verifikasi.")
             st.rerun()
 else:
     st.sidebar.write(f"Login sebagai: {username} ({role})")
@@ -74,31 +72,32 @@ if role == "BUYER":
     st.title("Dashboard BUYER")
     search_query = st.text_input("Cari Mata Kuliah atau Materi")
     
-    cursor.execute("SELECT DISTINCT mata_kuliah FROM catatan ORDER BY mata_kuliah")
-    mata_kuliah = cursor.fetchall()
-    selected_mk = st.selectbox("Pilih Mata Kuliah", [mk[0] for mk in mata_kuliah])
+    cursor.execute("SELECT course_id, course_name FROM courses ORDER BY course_name")
+    courses = cursor.fetchall()
+    course_dict = {course[0]: course[1] for course in courses}
+    selected_course_id = st.selectbox("Pilih Mata Kuliah", list(course_dict.keys()), format_func=lambda x: course_dict[x])
     
-    query = "SELECT catatan_id, materi, harga, file_path FROM catatan WHERE mata_kuliah = %s"
-    params = (selected_mk,)
+    query = "SELECT material_id, title, price, file_path FROM materials WHERE course_id = %s"
+    params = (selected_course_id,)
     
     if search_query:
-        query += " AND (materi LIKE %s OR mata_kuliah LIKE %s)"
-        params += (f"%{search_query}%", f"%{search_query}%")
+        query += " AND (title LIKE %s)"
+        params += (f"%{search_query}%",)
     
     cursor.execute(query, params)
-    materi_list = cursor.fetchall()
+    materials_list = cursor.fetchall()
     
     if "cart" not in st.session_state:
         st.session_state.cart = []
     
-    for materi in materi_list:
+    for material in materials_list:
         col1, col2 = st.columns([3,1])
         with col1:
-            st.write(materi[1])  # Nama materi
+            st.write(material[1])  # Nama materi
         with col2:
-            if st.button(f'Beli - Rp {materi[2]}', key=f'beli_{materi[0]}'):
-                st.session_state.cart.append(materi)
-                st.success(f'{materi[1]} ditambahkan ke keranjang!')
+            if st.button(f'Beli - Rp {material[2]}', key=f'beli_{material[0]}'):
+                st.session_state.cart.append(material)
+                st.success(f'{material[1]} ditambahkan ke keranjang!')
     
     st.sidebar.subheader("🛒 Keranjang Belanja")
     for item in st.session_state.cart:
@@ -115,32 +114,24 @@ if role == "BUYER":
 
 elif role == "SELLER":
     st.title("Dashboard SELLER")
-    cursor.execute("SELECT DISTINCT mata_kuliah FROM catatan ORDER BY mata_kuliah")
-    mata_kuliah = cursor.fetchall()
+    cursor.execute("SELECT course_id, course_name FROM courses ORDER BY course_name")
+    courses = cursor.fetchall()
+    course_dict = {course[0]: course[1] for course in courses}
     
     st.subheader("Upload Materi Baru")
-    mk_selected = st.selectbox("Pilih Mata Kuliah", [mk[0] for mk in mata_kuliah])
-    nama_materi = st.text_input("Nama Materi")
-    harga_materi = st.number_input("Harga (Rp)", min_value=0)
-    file_materi = st.file_uploader("Upload File Materi")
+    course_selected_id = st.selectbox("Pilih Mata Kuliah", list(course_dict.keys()), format_func=lambda x: course_dict[x])
+    material_title = st.text_input("Judul Materi")
+    material_price = st.number_input("Harga (Rp)", min_value=0)
+    file_material = st.file_uploader("Upload File Materi")
     
     if st.button("Upload"):
-        if nama_materi and harga_materi and file_materi:
-            cursor.execute("SELECT catatan_id FROM catatan ORDER BY catatan_id DESC LIMIT 1")
-            last_id = cursor.fetchone()
-            
-            if last_id:
-                last_num = int(last_id[0][1:])  # Ambil angka setelah "C"
-                new_id = f"C{last_num + 1:04d}"  # Format ID baru, contoh: C0002, C0003
-            else:
-                new_id = "C0001"  # Jika belum ada catatan
-            
-            cursor.execute(
-                "INSERT INTO catatan (catatan_id, mata_kuliah, materi, file_path, harga) VALUES (%s, %s, %s, %s, %s)", 
-                (new_id, mk_selected, nama_materi, f'/files/{file_materi.name}', harga_materi)
-            )
+        if material_title and material_price and file_material:
+            cursor.execute("INSERT INTO materials (course_id, title, file_path, price) VALUES (%s, %s, %s, %s)", (course_selected_id, material_title, f'/files/{file_material.name}', material_price))
             db.commit()
             st.success("Materi berhasil diunggah!")
+
+# Debugging Session State
+st.sidebar.write("DEBUG:", st.session_state)
 
 # Tutup koneksi database
 cursor.close()
