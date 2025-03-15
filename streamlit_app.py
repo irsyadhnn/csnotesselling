@@ -137,25 +137,35 @@ if role == "BUYER":
     if bayar_sekarang or bayar_nanti:
         total_harga = sum(item[2] for item in st.session_state.cart)
         payment_status = "PENDING" if bayar_nanti or balance < total_harga else "COMPLETED"
+        
         if payment_status == "COMPLETED":
             cursor.execute("UPDATE wallets SET balance = balance - %s WHERE user_id = %s", (total_harga, user_id))
-        for item in st.session_state.cart:
-            cursor.execute("INSERT INTO transactions (buyer_id, material_id, seller_id, amount, transaction_date, payment_status) VALUES (%s, %s, %s, %s, NOW(), %s)", (user_id, item[0], item[4], item[2], payment_status))
-        db.commit()
-        st.success("Transaksi berhasil!")
-        st.session_state.cart.clear()
-        st.rerun()
-    
+            for item in st.session_state.cart:
+                cursor.execute("UPDATE wallets SET balance = balance + %s WHERE user_id = %s", (item[2], item[4]))
+            db.commit()
+            st.success("Transaksi berhasil!")
+            st.session_state.cart.clear()
+            st.rerun()
+
     st.subheader("📌 Pending Payments")
     cursor.execute("SELECT transaction_id, amount FROM transactions WHERE buyer_id = %s AND payment_status = 'PENDING'", (user_id,))
     pending_payments = cursor.fetchall()
-    for payment in pending_payments:
-        if st.button(f"Bayar Sekarang - Rp {payment[1]}", key=f"pay_{payment[0]}"):
-            cursor.execute("UPDATE transactions SET payment_status = 'COMPLETED' WHERE transaction_id = %s", (payment[0],))
-            cursor.execute("UPDATE wallets SET balance = balance - %s WHERE user_id = %s", (payment[1], user_id))
-            db.commit()
-            st.success("Pembayaran berhasil!")
-            st.rerun()
+    
+    #for payment in pending_payments:
+    #    if st.button(f"Bayar Sekarang - Rp {payment[1]}", key=f"pay_{payment[0]}"):
+    #   cursor.execute("UPDATE transactions SET payment_status = 'COMPLETED' WHERE transaction_id = %s", (payment[0],))
+    #    cursor.execute("UPDATE wallets SET balance = balance - %s WHERE user_id = %s", (payment[1], user_id))
+    
+    # Tambahkan saldo ke seller berdasarkan transaksi ini
+    cursor.execute("SELECT seller_id FROM transactions WHERE transaction_id = %s", (payment[0],))
+    seller_id = cursor.fetchone()[0]
+    cursor.execute("UPDATE wallets SET balance = balance + %s WHERE user_id = %s", (payment[1], seller_id))
+    
+    db.commit()
+    st.success("Pembayaran berhasil!")
+    st.rerun()
+
+
 
 if role == "SELLER":
     st.title("Dashboard SELLER")
@@ -200,9 +210,6 @@ if role == "SELLER":
         else:
             st.error("Jumlah penarikan tidak valid atau saldo tidak mencukupi.")
     
-
-# Debugging Session State
-st.sidebar.write("DEBUG:", st.session_state)
 
 # Tutup koneksi database
 cursor.close()
