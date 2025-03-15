@@ -108,47 +108,51 @@ if role == "BUYER":
                 st.session_state.cart.append(material)
                 st.success(f'{material[1]} ditambahkan ke keranjang!')
     
+    st.sidebar.subheader("💰 Wallet")
+    cursor.execute("SELECT balance FROM wallets WHERE user_id = %s", (user_id,))
+    wallet = cursor.fetchone()
+    balance = wallet[0] if wallet else 0
+    st.sidebar.write(f"Saldo: Rp {balance}")
+    
+    tambah_saldo = st.sidebar.number_input("Tambah Saldo (Rp)", min_value=0, step=1000)
+    if st.sidebar.button("Isi Saldo"):
+        if tambah_saldo > 0:
+            if wallet:
+                cursor.execute("UPDATE wallets SET balance = balance + %s WHERE user_id = %s", (tambah_saldo, user_id))
+            else:
+                cursor.execute("INSERT INTO wallets (user_id, balance) VALUES (%s, %s)", (user_id, tambah_saldo))
+            db.commit()
+            st.success("Saldo berhasil ditambahkan!")
+            st.rerun()
+        else:
+            st.error("Masukkan jumlah saldo yang valid!")
+    
     st.sidebar.subheader("🛒 Keranjang Belanja")
     for item in st.session_state.cart:
         st.sidebar.write(f'{item[1]} - Rp {item[2]}')
     
-    if st.sidebar.button("Checkout"):
-        if st.session_state.cart:
-            cursor.execute("INSERT INTO transactions (buyer_id, transaction_date, payment_status) VALUES (%s, NOW(), 'PENDING')", (user_id,))
-            transaction_id = cursor.lastrowid
-            
-            for item in st.session_state.cart:
-                cursor.execute("INSERT INTO transaction_details (transaction_id, material_id, amount, seller_id) VALUES (%s, %s, %s, %s)", (transaction_id, item[0], item[2], item[4]))
-            
-            db.commit()
-            st.success("Checkout berhasil! Transaksi telah dicatat.")
-            st.session_state.cart.clear()
-        else:
-            st.error("Keranjang belanja kosong!")
-
-elif role == "SELLER":
-    st.title("Dashboard SELLER")
-    st.subheader("Daftar Materi yang Dijual")
-    cursor.execute("SELECT title, price FROM materials WHERE seller_id = %s", (user_id,))
-    materials = cursor.fetchall()
-    for material in materials:
-        st.write(f"{material[0]} - Rp {material[1]}")
+    bayar_sekarang = st.sidebar.button("Bayar Sekarang")
+    bayar_nanti = st.sidebar.button("Bayar Nanti")
     
-    st.subheader("Upload Materi Baru")
-    course_selected_id = st.selectbox("Pilih Mata Kuliah", list(course_dict.keys()), format_func=lambda x: course_dict[x])
-    material_title = st.text_input("Judul Materi")
-    material_price = st.number_input("Harga (Rp)", min_value=0)
-    file_material = st.file_uploader("Upload File Materi")
+    if bayar_sekarang or bayar_nanti:
+        total_harga = sum(item[2] for item in st.session_state.cart)
+        payment_status = "PENDING" if bayar_nanti or balance < total_harga else "COMPLETED"
+        if payment_status == "COMPLETED":
+            cursor.execute("UPDATE wallets SET balance = balance - %s WHERE user_id = %s", (total_harga, user_id))
+        for item in st.session_state.cart:
+            cursor.execute("INSERT INTO transactions (buyer_id, material_id, seller_id, amount, transaction_date, payment_status) VALUES (%s, %s, %s, %s, NOW(), %s)", (user_id, item[0], item[4], item[2], payment_status))
+        db.commit()
+        st.success("Transaksi berhasil!")
+        st.session_state.cart.clear()
+        st.rerun()
     
-    if st.button("Upload"):
-        if material_title and material_price and file_material:
-            cursor.execute("INSERT INTO materials (course_id, title, file_path, price, seller_id) VALUES (%s, %s, %s, %s, %s)", (course_selected_id, material_title, f'/files/{file_material.name}', material_price, user_id))
+    st.subheader("📌 Pending Payments")
+    cursor.execute("SELECT transaction_id, amount FROM transactions WHERE buyer_id = %s AND payment_status = 'PENDING'", (user_id,))
+    pending_payments = cursor.fetchall()
+    for payment in pending_payments:
+        if st.button(f"Bayar Sekarang - Rp {payment[1]}", key=f"pay_{payment[0]}"):
+            cursor.execute("UPDATE transactions SET payment_status = 'COMPLETED' WHERE transaction_id = %s", (payment[0],))
+            cursor.execute("UPDATE wallets SET balance = balance - %s WHERE user_id = %s", (payment[1], user_id))
             db.commit()
-            st.success("Materi berhasil diunggah!")
-
-# Debugging Session State
-st.sidebar.write("DEBUG:", st.session_state)
-
-# Tutup koneksi database
-cursor.close()
-db.close()
+            st.success("Pembayaran berhasil!")
+            st.rerun()
